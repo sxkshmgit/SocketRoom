@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -7,8 +9,10 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import settings
+from app.connections import ConnectionManager
 from app.database import SessionLocal
 from app.models import User
+from app.routers.websocket import manager
 from app.security import create_access_token
 
 POLICY_VIOLATION = 1008
@@ -24,7 +28,20 @@ def open_authed(client, token):
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "auth", "token": token})
         yield ws
+def wait_for(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for condition"
+        time.sleep(0.01)
 
+
+@contextmanager
+def open_joined(client, token):
+    """Like open_authed, but waits until the server has registered the socket."""
+    before = len(manager)
+    with open_authed(client, token) as ws:
+        wait_for(lambda: len(manager) > before)
+        yield ws
 
 def _signed_token(sub, key=None, expires_in=timedelta(minutes=5)):
     now = datetime.now(timezone.utc)
@@ -74,16 +91,89 @@ def test_websocket_disconnect_is_handled_cleanly(client, token):
         assert ws.receive_text() == "after reconnect"
 
 
-def test_websocket_connections_are_independent(client, token):
-    with (
-        open_authed(client, token) as first,
-        open_authed(client, token) as second,
-    ):
+def test_broadcast_reaches_all_clients_including_sender(client, token):
+    with open_joined(client, token) as first, open_joined(client, token) as second:
+        first.send_text("hello all")
+        assert first.receive_text() == "hello all"
+        assert second.receive_text() == "hello all"
+
+
+def test_broadcast_works_from_either_client(client, token):
+    with open_joined(client, token) as first, open_joined(client, token) as second:
         first.send_text("from first")
-        second.send_text("from second")
         assert first.receive_text() == "from first"
+        assert second.receive_text() == "from first"
+
+        second.send_text("from second")
+        assert first.receive_text() == "from second"
         assert second.receive_text() == "from second"
 
+
+def test_disconnected_client_is_removed_and_others_keep_working(client, token):
+    with open_joined(client, token) as first:
+        with open_joined(client, token):
+            assert len(manager) == 2
+        wait_for(lambda: len(manager) == 1)
+
+        first.send_text("still here")
+        assert first.receive_text() == "still here"
+    wait_for(lambda: len(manager) == 0)
+
+
+def test_rejected_connection_is_never_registered(client, registered_user):
+    before = len(manager)
+    with open_authed(client, "not.a.jwt") as ws:
+        assert_rejected(ws)
+    assert len(manager) == before
+
+
+class _StaleSocket:
+    async def send_text(self, message):
+        raise RuntimeError("connection closed")
+
+
+class _LiveSocket:
+    def __init__(self):
+        self.sent = []
+
+    async def send_text(self, message):
+        self.sent.append(message)
+
+
+def test_broadcast_drops_stale_connections_and_still_reaches_live_ones():
+    local = ConnectionManager()
+    stale, live = _StaleSocket(), _LiveSocket()
+    local.connect(stale)
+    local.connect(live)
+
+    asyncio.run(local.broadcast("hi"))
+
+    assert live.sent == ["hi"]
+    assert len(local) == 1
+class _DelayedSocket:
+    def __init__(self, delays):
+        self.delays = delays
+        self.received = []
+
+    async def send_text(self, message):
+        await asyncio.sleep(self.delays.get(message, 0))
+        self.received.append(message)
+
+
+def test_concurrent_broadcasts_arrive_in_same_order_for_all_clients():
+    local = ConnectionManager()
+    slow_on_first = _DelayedSocket({"1": 0.05})
+    fast = _DelayedSocket({})
+    local.connect(slow_on_first)
+    local.connect(fast)
+
+    async def run():
+        await asyncio.gather(local.broadcast("1"), local.broadcast("2"))
+
+    asyncio.run(run())
+
+    assert slow_on_first.received == ["1", "2"]
+    assert fast.received == ["1", "2"]
 
 def test_auth_message_is_not_echoed(client, token):
     with open_authed(client, token) as ws:
