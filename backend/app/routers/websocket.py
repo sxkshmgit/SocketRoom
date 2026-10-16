@@ -4,6 +4,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from starlette.concurrency import run_in_threadpool
 
+from app.connections import ConnectionManager
 from app.database import SessionLocal
 from app.models import User
 from app.security import decode_access_token
@@ -11,7 +12,7 @@ from app.security import decode_access_token
 router = APIRouter(tags=["websocket"])
 
 AUTH_TIMEOUT_SECONDS = 10
-
+manager = ConnectionManager()
 
 def _get_user(user_id: int) -> User | None:
     with SessionLocal() as db:
@@ -51,8 +52,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        while True:
-            message = await websocket.receive_text()
-            await websocket.send_text(message)
+        manager.connect(websocket)
+        try:
+            while True:
+                await manager.broadcast(await websocket.receive_text())
+        finally:
+            manager.disconnect(websocket)
     except WebSocketDisconnect:
         pass
