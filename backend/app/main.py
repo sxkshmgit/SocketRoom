@@ -5,10 +5,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from app import models  # noqa: F401  (registers User on Base.metadata before create_all)
 from app.config import settings
 from app.database import Base, engine
-from app import models  # noqa: F401  (registers User on Base.metadata before create_all)
-from app.routers import auth
+from app.routers import auth, websocket
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -28,7 +28,9 @@ def health() -> dict[str, str]:
         conn.execute(text("SELECT 1"))
     return {"status": "ok", "app": settings.app_name}
 
+
 app.include_router(auth.router)
+app.include_router(websocket.router)
 
 # Must stay last: serves the frontend at "/"
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
