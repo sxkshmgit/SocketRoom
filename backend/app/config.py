@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = Field(default=60, gt=0)
+    ws_send_timeout_seconds: float = Field(default=5.0, gt=0)
 
     @field_validator("secret_key")
     @classmethod

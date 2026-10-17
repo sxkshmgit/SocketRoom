@@ -145,3 +145,28 @@ def test_me_with_token_for_deleted_user_returns_401(client):
     token = _make_token("99999")
     res = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401
+
+
+# ---------- email normalization ----------
+
+def test_register_strips_and_lowercases_padded_email(client, user_payload):
+    res = client.post(
+        "/auth/register", json={**user_payload, "email": "  Alice@Example.COM \t"}
+    )
+    assert res.status_code == 201
+    assert res.json()["email"] == "alice@example.com"
+
+
+def test_register_padded_duplicate_email_returns_409(client, registered_user, user_payload):
+    other = {**user_payload, "username": "bob", "email": "  ALICE@example.com  "}
+    assert client.post("/auth/register", json=other).status_code == 409
+
+
+def test_register_padded_invalid_email_returns_422(client, user_payload):
+    res = client.post("/auth/register", json={**user_payload, "email": "  not-an-email  "})
+    assert res.status_code == 422
+
+
+def test_register_non_string_email_returns_422(client, user_payload):
+    res = client.post("/auth/register", json={**user_payload, "email": 12345})
+    assert res.status_code == 422
