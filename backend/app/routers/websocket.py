@@ -4,6 +4,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from starlette.concurrency import run_in_threadpool
 
+from app.config import settings
 from app.connections import ConnectionManager
 from app.database import SessionLocal
 from app.models import User
@@ -12,7 +13,8 @@ from app.security import decode_access_token
 router = APIRouter(tags=["websocket"])
 
 AUTH_TIMEOUT_SECONDS = 10
-manager = ConnectionManager()
+manager = ConnectionManager(send_timeout=settings.ws_send_timeout_seconds)
+
 
 def _get_user(user_id: int) -> User | None:
     with SessionLocal() as db:
@@ -55,7 +57,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         manager.connect(websocket)
         try:
             while True:
-                await manager.broadcast(await websocket.receive_text())
+                event = await websocket.receive()
+                if event["type"] == "websocket.disconnect":
+                    break
+                text = event.get("text")
+                if text is None:
+                    await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
+                    break
+                manager.broadcast(text)
         finally:
             manager.disconnect(websocket)
     except WebSocketDisconnect:

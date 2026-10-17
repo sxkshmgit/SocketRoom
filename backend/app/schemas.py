@@ -9,10 +9,12 @@ class UserCreate(BaseModel):
     email: str = Field(max_length=254, pattern=EMAIL_PATTERN)
     password: str = Field(min_length=8, max_length=128)
 
-    @field_validator("email")
+    @field_validator("email", mode="before")
     @classmethod
-    def normalize_email(cls, value: str) -> str:
-        return value.strip().lower()
+    def normalize_email(cls, value):
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
 
 class UserLogin(BaseModel):
