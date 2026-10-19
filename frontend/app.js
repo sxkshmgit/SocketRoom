@@ -521,19 +521,6 @@ async function handleReconnect() {
     reconnecting = false;
   }
 }
-// ---------- backend health (unchanged behaviour) ----------
-
-async function checkBackend() {
-  const el = $("status");
-  try {
-    const res = await fetch("/health");
-    if (!res.ok) throw new Error(res.status);
-    const data = await res.json();
-    el.textContent = `Backend: ${data.status}`;
-  } catch {
-    el.textContent = "Backend unreachable";
-  }
-}
 
 // ---------- wiring ----------
 
@@ -546,5 +533,4 @@ chat.form.addEventListener("submit", handleSend);
 chat.reconnect.addEventListener("click", handleReconnect);
 
 showView("loading");
-checkBackend();
 restoreSession();
