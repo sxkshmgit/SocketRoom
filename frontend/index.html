@@ -7,10 +7,69 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main class="center">
-      <h1>SocketRoom</h1>
-      <p>Frontend is running.</p>
-      <p id="status" class="muted">Checking backend...</p>
+    <main class="page">
+      <header class="brand">
+        <h1>SocketRoom</h1>
+        <p id="status" class="muted">Checking backend...</p>
+      </header>
+
+      <p id="loading-view" class="muted" role="status">Checking your session…</p>
+
+      <section id="auth-view" class="card" hidden>
+        <div class="tabs" role="tablist" aria-label="Account">
+          <button type="button" id="tab-login" class="tab" role="tab" aria-selected="true" aria-controls="login-form">Log in</button>
+          <button type="button" id="tab-register" class="tab" role="tab" aria-selected="false" aria-controls="register-form">Register</button>
+        </div>
+
+        <form id="login-form" novalidate>
+          <label for="login-username">Username</label>
+          <input id="login-username" name="username" type="text" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" />
+
+          <label for="login-password">Password</label>
+          <input id="login-password" name="password" type="password" maxlength="128" autocomplete="current-password" />
+
+          <p class="form-error" role="alert"></p>
+          <button type="submit" class="btn" data-label="Log in" data-busy-label="Logging in…">Log in</button>
+        </form>
+
+        <form id="register-form" novalidate hidden>
+          <label for="register-username">Username</label>
+          <input id="register-username" name="username" type="text" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" />
+          <p class="hint">3–32 letters, numbers or underscores.</p>
+
+          <label for="register-email">Email</label>
+          <input id="register-email" name="email" type="email" maxlength="254" autocomplete="email" autocapitalize="none" spellcheck="false" />
+
+          <label for="register-password">Password</label>
+          <input id="register-password" name="password" type="password" maxlength="128" autocomplete="new-password" />
+          <p class="hint">8–128 characters.</p>
+
+          <p class="form-error" role="alert"></p>
+          <button type="submit" class="btn" data-label="Create account" data-busy-label="Creating account…">Create account</button>
+        </form>
+      </section>
+
+            <section id="app-view" class="card chat" hidden>
+        <header class="chat-header">
+          <div>
+            <p class="welcome">Signed in as <strong id="current-user"></strong></p>
+            <p id="connection-status" class="connection" data-state="disconnected" role="status">Disconnected</p>
+          </div>
+          <div class="chat-actions">
+            <button type="button" id="reconnect-button" class="btn btn-secondary btn-small" hidden>Reconnect</button>
+            <button type="button" id="logout-button" class="btn btn-secondary btn-small">Log out</button>
+          </div>
+        </header>
+
+        <ol id="message-list" class="messages" aria-label="Chat messages"></ol>
+
+        <form id="message-form" class="message-form" novalidate>
+          <label for="message-input" class="visually-hidden">Message</label>
+          <input id="message-input" type="text" autocomplete="off" placeholder="Type a message…" disabled />
+          <button type="submit" id="send-button" class="btn" disabled>Send</button>
+        </form>
+        <p id="chat-error" class="form-error" role="alert"></p>
+      </section>
     </main>
     <script src="/app.js"></script>
   </body>
