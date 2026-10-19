@@ -3,16 +3,19 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from starlette.concurrency import run_in_threadpool
-
+from pydantic import ValidationError
 from app.config import settings
 from app.connections import ConnectionManager
 from app.database import SessionLocal
 from app.models import User
+from app.schemas import IncomingMessage, OutgoingMessage
 from app.security import decode_access_token
 
 router = APIRouter(tags=["websocket"])
 
 AUTH_TIMEOUT_SECONDS = 10
+
+
 manager = ConnectionManager(send_timeout=settings.ws_send_timeout_seconds)
 
 
@@ -64,7 +67,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 if text is None:
                     await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
                     break
-                manager.broadcast(text)
+                try:
+                    incoming = IncomingMessage.model_validate_json(text)
+                except ValidationError:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    break
+                manager.broadcast(
+                    OutgoingMessage(
+                        sender=user.username, content=incoming.content
+                    ).model_dump_json()
+                )
         finally:
             manager.disconnect(websocket)
     except WebSocketDisconnect:
