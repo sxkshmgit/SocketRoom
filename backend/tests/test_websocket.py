@@ -3,6 +3,7 @@ import json
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from app.schemas import MESSAGE_MAX_LENGTH
 
 import jwt
 import pytest
@@ -49,6 +50,26 @@ def open_joined(client, token):
         wait_for(lambda: len(manager) > before)
         yield ws
 
+def send_msg(ws, content):
+    ws.send_json({"type": "message", "content": content})
+
+
+def recv_msg(ws):
+    return json.loads(ws.receive_text())
+
+
+def assert_msg(message, content, sender="alice"):
+    assert message == {"type": "message", "sender": sender, "content": content}
+
+
+@pytest.fixture
+def bob_token(client):
+    payload = {"username": "bob", "email": "bob@example.com", "password": "correct-horse-battery"}
+    assert client.post("/auth/register", json=payload).status_code == 201
+    res = client.post(
+        "/auth/login", json={"username": "bob", "password": payload["password"]}
+    )
+    return res.json()["access_token"]
 
 def _signed_token(sub, key=None, expires_in=timedelta(minutes=5)):
     now = datetime.now(timezone.utc)
@@ -99,15 +120,14 @@ async def eventually(predicate, timeout=2.0):
 
 def test_websocket_connects(client, token):
     with open_authed(client, token) as ws:
-        ws.send_text("ping")
-        assert ws.receive_text() == "ping"
+        send_msg(ws, "ping")
+        assert_msg(recv_msg(ws), "ping")
 
 
-def test_auth_message_is_not_echoed(client, token):
+def test_auth_message_is_not_broadcast(client, token):
     with open_authed(client, token) as ws:
-        ws.send_text("first real message")
-        assert ws.receive_text() == "first real message"
-
+        send_msg(ws, "first real message")
+        assert_msg(recv_msg(ws), "first real message")
 
 @pytest.mark.parametrize(
     "payload",
@@ -182,47 +202,71 @@ def test_rejected_connection_is_never_registered(client, registered_user):
 
 # ---------- messaging and broadcast (endpoint) ----------
 
-def test_websocket_echoes_message(client, token):
+def test_websocket_echoes_message_with_sender(client, token):
     with open_authed(client, token) as ws:
-        ws.send_text("hello socketroom")
-        assert ws.receive_text() == "hello socketroom"
+        send_msg(ws, "hello socketroom")
+        assert_msg(recv_msg(ws), "hello socketroom")
 
 
 def test_websocket_echoes_multiple_messages_in_order(client, token):
-    messages = ["one", "two", "three", "", "unicode ✓"]
+    messages = ["one", "two", "three", "unicode ✓"]
     with open_authed(client, token) as ws:
-        for message in messages:
-            ws.send_text(message)
-            assert ws.receive_text() == message
+        for content in messages:
+            send_msg(ws, content)
+            assert_msg(recv_msg(ws), content)
+
+
+def test_content_is_trimmed(client, token):
+    with open_authed(client, token) as ws:
+        send_msg(ws, "  padded \n")
+        assert_msg(recv_msg(ws), "padded")
+
+
+def test_content_at_max_length_is_accepted(client, token):
+    content = "x" * MESSAGE_MAX_LENGTH
+    with open_authed(client, token) as ws:
+        send_msg(ws, content)
+        assert_msg(recv_msg(ws), content)
+
+
+def test_sender_is_the_authenticated_username(client, token, bob_token):
+    with open_joined(client, token) as alice, open_joined(client, bob_token) as bob:
+        send_msg(alice, "from alice")
+        assert_msg(recv_msg(alice), "from alice", sender="alice")
+        assert_msg(recv_msg(bob), "from alice", sender="alice")
+
+        send_msg(bob, "from bob")
+        assert_msg(recv_msg(alice), "from bob", sender="bob")
+        assert_msg(recv_msg(bob), "from bob", sender="bob")
 
 
 def test_websocket_disconnect_is_handled_cleanly(client, token):
     with open_authed(client, token) as ws:
-        ws.send_text("before disconnect")
-        assert ws.receive_text() == "before disconnect"
+        send_msg(ws, "before disconnect")
+        assert_msg(recv_msg(ws), "before disconnect")
 
     # The server survived the disconnect and still accepts new connections.
     with open_authed(client, token) as ws:
-        ws.send_text("after reconnect")
-        assert ws.receive_text() == "after reconnect"
+        send_msg(ws, "after reconnect")
+        assert_msg(recv_msg(ws), "after reconnect")
 
 
 def test_broadcast_reaches_all_clients_including_sender(client, token):
     with open_joined(client, token) as first, open_joined(client, token) as second:
-        first.send_text("hello all")
-        assert first.receive_text() == "hello all"
-        assert second.receive_text() == "hello all"
+        send_msg(first, "hello all")
+        assert_msg(recv_msg(first), "hello all")
+        assert_msg(recv_msg(second), "hello all")
 
 
 def test_broadcast_works_from_either_client(client, token):
     with open_joined(client, token) as first, open_joined(client, token) as second:
-        first.send_text("from first")
-        assert first.receive_text() == "from first"
-        assert second.receive_text() == "from first"
+        send_msg(first, "from first")
+        assert_msg(recv_msg(first), "from first")
+        assert_msg(recv_msg(second), "from first")
 
-        second.send_text("from second")
-        assert first.receive_text() == "from second"
-        assert second.receive_text() == "from second"
+        send_msg(second, "from second")
+        assert_msg(recv_msg(first), "from second")
+        assert_msg(recv_msg(second), "from second")
 
 
 def test_alternating_senders_never_hang(client, token):
@@ -231,9 +275,9 @@ def test_alternating_senders_never_hang(client, token):
     with open_joined(client, token) as first, open_joined(client, token) as second:
         for i in range(25):
             sender, other = (first, second) if i % 2 == 0 else (second, first)
-            sender.send_text(f"m{i}")
-            assert sender.receive_text() == f"m{i}"
-            assert other.receive_text() == f"m{i}"
+            send_msg(sender, f"m{i}")
+            assert_msg(recv_msg(sender), f"m{i}")
+            assert_msg(recv_msg(other), f"m{i}")
 
 
 def test_all_clients_see_the_same_order(client, token):
@@ -243,8 +287,8 @@ def test_all_clients_see_the_same_order(client, token):
         open_joined(client, token) as c,
     ):
         for ws, name in ((a, "a"), (b, "b"), (c, "c")):
-            ws.send_text(name)
-        seen = [[ws.receive_text() for _ in range(3)] for ws in (a, b, c)]
+            send_msg(ws, name)
+        seen = [[recv_msg(ws)["content"] for _ in range(3)] for ws in (a, b, c)]
     assert seen[0] == seen[1] == seen[2]
     assert sorted(seen[0]) == ["a", "b", "c"]
 
@@ -255,8 +299,8 @@ def test_disconnected_client_is_removed_and_others_keep_working(client, token):
             assert len(manager) == 2
         wait_for(lambda: len(manager) == 1)
 
-        first.send_text("still here")
-        assert first.receive_text() == "still here"
+        send_msg(first, "still here")
+        assert_msg(recv_msg(first), "still here")
     wait_for(lambda: len(manager) == 0)
 
 
@@ -273,8 +317,45 @@ def test_server_keeps_working_after_a_binary_frame(client, token):
         assert_rejected(bad, code=UNSUPPORTED_DATA)
 
     with open_joined(client, token) as ws:
-        ws.send_text("still fine")
-        assert ws.receive_text() == "still fine"
+        send_msg(ws, "still fine")
+        assert_msg(recv_msg(ws), "still fine")
+
+
+# ---------- message protocol validation ----------
+
+INVALID_MESSAGES = {
+    "malformed_json": "{not json",
+    "plain_text": "just text",
+    "json_array": json.dumps(["message"]),
+    "missing_content": json.dumps({"type": "message"}),
+    "missing_type": json.dumps({"content": "hi"}),
+    "non_string_content": json.dumps({"type": "message", "content": 123}),
+    "invalid_type": json.dumps({"type": "typing", "content": "hi"}),
+    "forged_sender": json.dumps({"type": "message", "content": "hi", "sender": "mallory"}),
+    "empty_content": json.dumps({"type": "message", "content": ""}),
+    "whitespace_only": json.dumps({"type": "message", "content": "  \t\n "}),
+    "too_long": json.dumps({"type": "message", "content": "x" * (MESSAGE_MAX_LENGTH + 1)}),
+}
+
+
+@pytest.mark.parametrize("payload", INVALID_MESSAGES.values(), ids=INVALID_MESSAGES.keys())
+def test_invalid_message_closes_with_1008_and_cleans_up(client, token, payload):
+    with open_joined(client, token) as ws:
+        ws.send_text(payload)
+        assert_rejected(ws)
+    wait_for(lambda: len(manager) == 0)
+
+
+def test_invalid_message_is_not_broadcast_and_others_keep_working(client, token):
+    forged = INVALID_MESSAGES["forged_sender"]
+    with open_joined(client, token) as bad, open_joined(client, token) as good:
+        bad.send_text(forged)
+        assert_rejected(bad)
+        wait_for(lambda: len(manager) == 1)
+
+        send_msg(good, "legit")
+        # The first thing `good` sees is its own legit message, not the forged one.
+        assert_msg(recv_msg(good), "legit")
 
 
 # ---------- connection manager (unit) ----------
